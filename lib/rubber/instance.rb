@@ -52,6 +52,7 @@ module Rubber
       end
 
       def load_from_file(io)
+        maybe_discover_instances
         item_list =  YAML.load(io.read)
         if item_list
           item_list.each do |i|
@@ -65,6 +66,7 @@ module Rubber
       end
       
       def load_from_table(table_key)
+        maybe_discover_instances
         Rubber.logger.debug{"Reading rubber instances from cloud table #{table_key}"}
         store = Rubber.cloud.table_store(table_key)
         items = store.find()
@@ -105,7 +107,10 @@ module Rubber
 
       def save_to_file(io)
         data = []
-        data.push(*@items.values)
+        env = Rubber::Configuration.rubber_env
+        if ! env.discover_instances
+          data.push(*@items.values)
+        end
         data.push(@artifacts)
         io.write(YAML.dump(data))
       end
@@ -123,10 +128,39 @@ module Rubber
         if artifacts.size > 0
           store.put('_artifacts_', artifacts)
         end
-        
-        # write out all the instance data
-        @items.values.each do |item|
-          store.put(item.name, item.to_hash)
+
+        env = Rubber::Configuration.rubber_env
+        if ! env.discover_instances
+          # write out all the instance data
+          @items.values.each do |item|
+            store.put(item.name, item.to_hash)
+          end
+        end
+      end
+
+      def maybe_discover_instances
+        env = Rubber::Configuration.rubber_env
+        if env.discover_instances
+          servers = Rubber.cloud.compute_provider.servers
+          items = servers.reject { |server| server.attributes[:state] == 'terminated' }.collect do |server|
+            item = Rubber::Configuration::InstanceItem.new(
+                server.tags['Name'],
+                server.tags['Domain'],
+                server.tags['Roles'].split(',').collect {|role_value|RoleItem.parse(role_value)},
+                server.attributes[:id],
+                server.attributes[:flavor_id],
+                server.attributes[:image_id],
+                server.attributes[:groups].reject {|sg| sg.match(/^sg/)})
+            item.external_host = server.attributes[:dns_name]
+            item.external_ip = server.attributes[:public_ip_address]
+            item.internal_host = server.attributes[:private_dns_name]
+            item.internal_ip = server.attributes[:private_ip_address]
+            item.zone = server.attributes[:availability_zone]
+            item.platform = server.attributes[:platform]
+            item.root_device_type = server.attributes[:root_device_type]
+            item
+          end
+          @items = items.inject({}) { |hash, item| hash[item.name] = item; hash }
         end
       end
       
