@@ -71,6 +71,7 @@ module Rubber
           unset RUBYOPT
           echo "Uploading image to S3..."
           ec2-upload-bundle --batch -b #{env.image_bucket} -m /mnt/#{image_name}.manifest.xml -a #{env.access_key} -s #{env.secret_access_key}
+          rm -rf #{ec2_pk_dest} #{ec2_cert_dest} #{ec2_key_dest} /mnt/#{image_name}*part /mnt/img-mnt
         CMD
 
         image_location = "#{env.image_bucket}/#{image_name}.manifest.xml"
