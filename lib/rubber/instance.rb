@@ -52,7 +52,6 @@ module Rubber
       end
 
       def load_from_file(io)
-        maybe_discover_instances
         item_list =  YAML.load(io.read)
         if item_list
           item_list.each do |i|
@@ -63,10 +62,10 @@ module Rubber
             end
           end
         end
+        maybe_discover_instances
       end
       
       def load_from_table(table_key)
-        maybe_discover_instances
         Rubber.logger.debug{"Reading rubber instances from cloud table #{table_key}"}
         store = Rubber.cloud.table_store(table_key)
         items = store.find()
@@ -79,6 +78,7 @@ module Rubber
               @items[ic.name] = ic 
           end
         end
+        maybe_discover_instances
       end
       
       def save(instance_storage=@instance_storage, backup=@opts[:backup])
@@ -108,9 +108,7 @@ module Rubber
       def save_to_file(io)
         data = []
         env = Rubber::Configuration.rubber_env
-        if ! env.discover_instances
-          data.push(*@items.values)
-        end
+        data.push(*@items.values)
         data.push(@artifacts)
         io.write(YAML.dump(data))
       end
@@ -130,23 +128,44 @@ module Rubber
         end
 
         env = Rubber::Configuration.rubber_env
-        if ! env.discover_instances
-          # write out all the instance data
-          @items.values.each do |item|
-            store.put(item.name, item.to_hash)
-          end
+        # write out all the instance data
+        @items.values.each do |item|
+          store.put(item.name, item.to_hash)
         end
       end
 
       def maybe_discover_instances
         env = Rubber::Configuration.rubber_env
         if env.discover_instances
+          indices = {}
           servers = Rubber.cloud.compute_provider.servers
           items = servers.reject { |server| server.attributes[:state] == 'terminated' }.collect do |server|
+            name = server.tags['Name']
+            if name.nil?
+              ag_group = server.tags['aws:autoscaling:groupName']
+              next if ag_group.nil?
+              if indices[ag_group].nil?
+                @items.each do |k, v|
+                  next if k.nil?
+                  match = k.match(ag_group + "-(\d)")
+                  if match && match[1].to_i > indices[ag_group]
+                    indices[ag_group] = match[1].to_i
+                  end
+                end
+              end
+              if indices[ag_group].nil?
+                indices[ag_group] = 0
+              end
+              indices[ag_group] += 1
+              name = ag_group + "-" + indices[ag_group].to_s
+              Rubber.cloud.create_tags(server.attributes[:id], :Name => name)
+            end
+            next if server.tags['Roles'].nil?
+            roles = server.tags['Roles'].split('|').collect {|role_value|RoleItem.parse(role_value)}
             item = Rubber::Configuration::InstanceItem.new(
-                server.tags['Name'],
+                name,
                 server.tags['Domain'],
-                server.tags['Roles'].split(',').collect {|role_value|RoleItem.parse(role_value)},
+                roles,
                 server.attributes[:id],
                 server.attributes[:flavor_id],
                 server.attributes[:image_id],
@@ -160,7 +179,12 @@ module Rubber
             item.root_device_type = server.attributes[:root_device_type]
             item
           end
-          @items = items.inject({}) { |hash, item| hash[item.name] = item; hash }
+          items = items.reject {|i| i.nil?}
+          items.each do |item|
+            if @items[item.name].nil?
+              @items[item.name] = item
+            end
+          end
         end
       end
       
