@@ -34,23 +34,24 @@ module Rubber
         # a proper hostname on startup.
         if instance.nil? and Rubber.env == "production"
           require 'open-uri'
+          env = Rubber::Configuration.rubber_env
+          instance_id = nil
           Timeout::timeout(5) do
             instance_id = URI.parse('http://169.254.169.254/latest/meta-data/instance-id').read
           end
-          instance = cfg.instance.detect {|i| i.instance_id == instance_id}
-          if instance and instance.name.nil?
-            if instance.autoscaling_group
-              index = cfg.instance.collect do |i|
-                match = i.name.match(instance.autoscaling_group + "-(\d)")
-                match[1].to_i
-              end.max + 1
-            end
-            instance.name = ag_group + "-#{index}"
+          cfg.instance.discover_instances if not env.instance_storage =~ /discover/
+          instance = env.rubber_instances.detect {|i| i.instance_id == instance_id}
+          if instance and instance.name.nil? and instance.autoscaling_group
+            index = cfg.instance.collect do |i|
+              match = i.name.match(instance.autoscaling_group + "-(\d)")
+              match[1].to_i
+            end.max + 1
+            instance.name = instance.autoscaling_group + "-#{index}"
             Rubber.cloud.create_tags(instance_id, :Name => instance.name)
           end
           if instance and instance.name
             instance_alias = instance.name
-            system "sudo hostname #{instance.name}.#{Rubber::Configuration.rubber_env.domain}"
+            system "sudo hostname #{instance.name}.#{env.domain}"
           end
         end
 
@@ -75,9 +76,43 @@ module Rubber
           cfg.instance.add(instance)
           gen = Rubber::Configuration::Generator.new("#{Rubber.root}/config/rubber", role_names, instance_alias)
           gen.fake_root ="#{Rubber.root}/tmp/rubber"
-        else
-          puts "Instance not found for host: #{instance_alias}"
-          exit 1
+        elsif Rubber::Configuration.rubber_env.discover_instances
+          # Discover ourselves.
+          # FIXME this is very AWS specific
+          begin
+            require 'open-uri'
+            Timeout::timeout(5) do
+              instance_id = URI.parse('http://169.254.169.254/latest/meta-data/instance-id').read
+            end
+            server = cloud.describe_instances(instance_id).first
+            instance_roles = server.tags['Roles'].split('|').collect do |role_value|
+              RoleItem.parse(role_value)
+            end
+            instance_alias = server.tags['Name']
+            instance = Rubber::Configuration::InstanceItem.new(
+                instance_alias,
+                server.tags['Domain'],
+                instance_roles,
+                server.attributes[:id],
+                server.attributes[:flavor_id],
+                server.attributes[:image_id],
+                server.attributes[:groups].reject {|sg| sg.match(/^sg/)})
+            instance.external_host = server.attributes[:dns_name]
+            instance.external_ip = server.attributes[:public_ip_address]
+            instance.internal_host = server.attributes[:private_dns_name]
+            instance.internal_ip = server.attributes[:private_ip_address]
+            instance.zone = server.attributes[:availability_zone]
+            instance.platform = server.attributes[:platform]
+            instance.root_device_type = server.attributes[:root_device_type]
+
+            cfg.instance.add(instance)
+            env = cfg.environment.bind(role_names, instance_alias)
+            gen = Rubber::Configuration::Generator.new(
+              "#{Rubber.root}/config/rubber", server.tags['Roles'].gsub("|", ","), instance_alias)
+          rescue
+            puts "Instance not found for host: #{instance_alias}"
+            exit 1
+          end
         end
 
         if file
