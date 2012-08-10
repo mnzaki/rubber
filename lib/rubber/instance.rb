@@ -137,29 +137,11 @@ module Rubber
       def maybe_discover_instances
         env = Rubber::Configuration.rubber_env
         if env.discover_instances
-          indices = {}
           servers = Rubber.cloud.compute_provider.servers
+
           items = servers.reject { |server| server.attributes[:state] == 'terminated' }.collect do |server|
             name = server.tags['Name']
-            if name.nil?
-              ag_group = server.tags['aws:autoscaling:groupName']
-              next if ag_group.nil?
-              if indices[ag_group].nil?
-                @items.each do |k, v|
-                  next if k.nil?
-                  match = k.match(ag_group + "-(\d)")
-                  if match && match[1].to_i > indices[ag_group]
-                    indices[ag_group] = match[1].to_i
-                  end
-                end
-              end
-              if indices[ag_group].nil?
-                indices[ag_group] = 0
-              end
-              indices[ag_group] += 1
-              name = ag_group + "-" + indices[ag_group].to_s
-              Rubber.cloud.create_tags(server.attributes[:id], :Name => name)
-            end
+            next if name.nil? and server.tags['aws:autoscaling:groupName'].nil?
             next if server.tags['Roles'].nil?
             roles = server.tags['Roles'].split('|').collect {|role_value|RoleItem.parse(role_value)}
             item = Rubber::Configuration::InstanceItem.new(
@@ -179,12 +161,32 @@ module Rubber
             item.root_device_type = server.attributes[:root_device_type]
             item
           end
+
           items = items.reject {|i| i.nil?}
+          indices = {}
+
           items.each do |item|
-            if @items[item.name].nil?
-              @items[item.name] = item
+            if item.name.nil?
+              ag_group = server.tags['aws:autoscaling:groupName']
+              if indices[ag_group].nil?
+                items.each do |k, v|
+                  next if k.nil?
+                  match = k.match(ag_group + "-(\d)")
+                  if match and match[1].to_i > indices[ag_group]
+                    indices[ag_group] = match[1].to_i
+                  end
+                end
+              end
+              if indices[ag_group].nil?
+                indices[ag_group] = 0
+              end
+              indices[ag_group] += 1
+              item.name = ag_group + "-" + indices[ag_group].to_s
+              Rubber.cloud.create_tags(server.attributes[:id], :Name => item.name)
             end
+            @items[item.name] = item
           end
+
         end
       end
       
