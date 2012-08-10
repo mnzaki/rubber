@@ -28,6 +28,32 @@ module Rubber
         cfg = Rubber::Configuration.get_configuration(Rubber.env)
         instance_alias = cfg.environment.current_host
         instance = cfg.instance[instance_alias]
+
+        # If we could not find the current host, try to discover it.
+        # This is specially useful for autoscaled instances which will not have
+        # a proper hostname on startup.
+        if instance.nil? and Rubber.env == "production"
+          require 'open-uri'
+          Timeout::timeout(5) do
+            instance_id = URI.parse('http://169.254.169.254/latest/meta-data/instance-id').read
+          end
+          instance = cfg.instance.detect {|i| i.instance_id == instance_id}
+          if instance and instance.name.nil?
+            if instance.autoscaling_group
+              index = cfg.instance.collect do |i|
+                match = i.name.match(instance.autoscaling_group + "-(\d)")
+                match[1].to_i
+              end.max + 1
+            end
+            instance.name = ag_group + "-#{index}"
+            Rubber.cloud.create_tags(instance_id, :Name => instance.name)
+          end
+          if instance and instance.name
+            instance_alias = instance.name
+            system "sudo hostname #{instance.name}.#{Rubber::Configuration.rubber_env.domain}"
+          end
+        end
+
         if instance
           role_names = instance.role_names
           env = cfg.environment.bind(role_names, instance_alias)
@@ -53,7 +79,7 @@ module Rubber
           puts "Instance not found for host: #{instance_alias}"
           exit 1
         end
-        
+
         if file
           gen.file_pattern = file
         end
