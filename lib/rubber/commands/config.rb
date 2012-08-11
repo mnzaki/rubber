@@ -41,16 +41,7 @@ module Rubber
           end
           cfg.instance.discover_instances if not env.instance_storage =~ /discover/
           instance = env.rubber_instances.detect {|i| i.instance_id == instance_id}
-          if instance and instance.name.nil? and instance.autoscaling_group
-            index = cfg.instance.collect do |i|
-              match = i.name.match(instance.autoscaling_group + "-(\d)")
-              match[1].to_i
-            end.max + 1
-            instance.name = instance.autoscaling_group + "-#{index}"
-            Rubber.cloud.create_tags(instance_id, :Name => instance.name)
-          end
           if instance and instance.name
-            instance_alias = instance.name
             system "sudo hostname #{instance.name}.#{env.domain}"
           end
         end

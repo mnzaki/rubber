@@ -80,39 +80,59 @@ module Rubber
           end
         end
       end
-
+      
+      def discover_item(server, name = nil)
+        roles = []
+        if server.tags['Roles']
+          roles = server.tags['Roles'].split('|').collect do |role_value|
+            RoleItem.parse(role_value)
+          end
+        end
+        item = Rubber::Configuration::InstanceItem.new(
+            name || server.tags['Name'],
+            server.tags['Domain'],
+            roles,
+            server.attributes[:id],
+            server.attributes[:flavor_id],
+            server.attributes[:image_id],
+            server.attributes[:groups].reject {|sg| sg.match(/^sg/)})
+        item.external_host = server.attributes[:dns_name]
+        item.external_ip = server.attributes[:public_ip_address]
+        item.internal_host = server.attributes[:private_dns_name]
+        item.internal_ip = server.attributes[:private_ip_address]
+        item.zone = server.attributes[:availability_zone]
+        item.platform = server.attributes[:platform]
+        item.root_device_type = server.attributes[:root_device_type]
+        item.autoscaling_group =  server.tags['aws:autoscaling:groupName']
+        @items[item.name] = item
+      end
+      
       def discover_instances
         servers = Rubber.cloud.compute_provider.servers
-        items = servers.reject { |server| server.attributes[:state] == 'terminated' }.collect do |server|
-          name = server.tags['Name']
-          next if name.nil? and server.tags['aws:autoscaling:groupName'].nil?
-          roles = []
-          if server.tags['Roles']
-            roles = server.tags['Roles'].split('|').collect do |role_value|
-              RoleItem.parse(role_value)
+        nameless = []
+        servers.reject { |server| server.attributes[:state] == 'terminated' }.each do |server|
+          if server.tags['Name'].nil?
+            nameless.push server
+          else
+            discover_item server
+          end
+        end
+        indices = {}
+        nameless.each do |server|
+          ag_group = server.tags['aws:autoscaling:groupName']
+          if not indices[ag_group]
+            indices[ag_group] = 0
+            @items.values.each do |item|
+              match = item.name.match(ag_group + "-(\d)")
+              if match and match[1].to_i > indices[ag_group]
+                indices[ag_group] = match[1].to_i
+              end
             end
           end
-          item = Rubber::Configuration::InstanceItem.new(
-              name,
-              server.tags['Domain'],
-              roles,
-              server.attributes[:id],
-              server.attributes[:flavor_id],
-              server.attributes[:image_id],
-              server.attributes[:groups].reject {|sg| sg.match(/^sg/)})
-          item.external_host = server.attributes[:dns_name]
-          item.external_ip = server.attributes[:public_ip_address]
-          item.internal_host = server.attributes[:private_dns_name]
-          item.internal_ip = server.attributes[:private_ip_address]
-          item.zone = server.attributes[:availability_zone]
-          item.platform = server.attributes[:platform]
-          item.root_device_type = server.attributes[:root_device_type]
-          item.autoscaling_group = server.tags['aws:autoscaling:groupName']
-          item
-        end
-
-        items.each do |item|
-          @items[item.name] = item if item
+          indices[ag_group] += 1
+          instance_alias = ag_group + "-#{indices[ag_group]}"
+          Rubber.cloud.create_tags(server.attributes[:id], :Name => instance_alias)
+          discover_item server, instance_alias
         end
       end
       
