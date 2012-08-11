@@ -120,6 +120,7 @@ module Rubber
         indices = {}
         nameless.each do |server|
           ag_group = server.tags['aws:autoscaling:groupName']
+          next if ag_group.nil?
           if not indices[ag_group]
             indices[ag_group] = 0
             @items.values.each do |item|
