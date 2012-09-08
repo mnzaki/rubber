@@ -119,19 +119,19 @@ module Rubber
         end
         indices = {}
         nameless.each do |server|
-          ag_group = server.tags['aws:autoscaling:groupName']
-          next if ag_group.nil?
-          if not indices[ag_group]
-            indices[ag_group] = 0
+          as_group = server.tags['aws:autoscaling:groupName']
+          next if as_group.nil?
+          if not indices[as_group]
+            indices[as_group] = 0
             @items.values.each do |item|
-              match = item.name.match(ag_group + "-(\d)")
-              if match and match[1].to_i > indices[ag_group]
-                indices[ag_group] = match[1].to_i
+              match = item.name.match(/#{as_group}-(\d)/)
+              if match and match[1].to_i > indices[as_group]
+                indices[as_group] = match[1].to_i
               end
             end
           end
-          indices[ag_group] += 1
-          instance_alias = ag_group + "-#{indices[ag_group]}"
+          indices[as_group] += 1
+          instance_alias = as_group + "-#{indices[as_group]}"
           Rubber.cloud.create_tags(server.attributes[:id], :Name => instance_alias)
           discover_item server, instance_alias
         end
